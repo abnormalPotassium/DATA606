@@ -1,0 +1,377 @@
+---
+title: "DATA 606 Data Final Project"
+author: "Taha Ahmad"
+date: "`r Sys.Date()`"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r setup libraries, message=FALSE}
+# load in required packages
+library(tidyverse)
+library(httr2)
+library(jsonlite)
+library(psych)
+library(GGally)
+library(ggpubr)
+library(ggfortify)
+```
+
+## Abstract
+
+In this project, we take data regarding games listed on Valve's Steam platform for video games from the Steam Spy API. Specifically, we're interested in the median playtime of the games with the top 100 users in the past 2 weeks from this data. With the additional variables of user rating, amount of game owners, and game price we also attempt to answer the question of if: The user ratings, reported by Steam, are related to median playtime. This is answered based on creating regression models from the data after processing, transforming, and removing the outliers from the data.
+
+One model was a simple linear regression model with user rating predicting playtime, this model had a very low $R^2$ of 0.0107 and the coefficient of user rating was not statistically significant at a p-value of 0.350, additionally many assumptions were violated. The second model was a multiple regression model with multiple variables predicting playtime, this model had a negative adjusted $R^2$ of -0.0312 and the coefficient of user rating was not statistically significant at a p-value of 0.534, additionally many assumptions were violated. Thus we concluded with our data that the user ratings, reported by Steam, are not related to median playtime.
+
+## Introduction
+
+Valve corporation's Steam is the most popular store front for digital computer games. Nearly every video game that is released these days which supports being played on computers will be listed for sale on Steam. Valve also provides robust API access to stats regarding both players and games for developers to utilize. This makes it ideal for gathering data on sales and engagement about video games.
+
+We will be utilizing the [Steam Spy](https://steamspy.com/about) API which collects data directly from the Steam Web API to gather the games which have the highest count of players in the past two weeks. Each case from this dataset represents one of the top 100 most played games (based on the amount of users that have launched the game) in the past two weeks. Thus there are 100 observations within our dataset.
+
+Some of the information gathered includes the amount of user reviews a game has, both positive and negative, a general estimation of the amount of users that own a game, the price of the game, and the median playtime within the past two weeks between users who have played the game.
+
+Using this information we want to find what variables lead to the game with the highest user engagement, i.e. median playtime. Thus, we start with our research question of: Considering the top 100 most played games in the past 2 weeks, are the user ratings, reported by Steam, related to median playtime?
+
+We aim to answer this question by generating a regression model.
+
+## Data Preparation
+
+Here we initially load in the data from the API. We also process our data down to only have the columns which believe will be relevant for our analysis.
+
+We create an estimation for the user rating displayed directly on the Steam marketplace which is the amount of positive reviews over total reviews, we convert playtime to hours from minutes, and we change the price from cents to dollars.
+
+Then we preview our dataframe that is ready to explore.
+
+```{r data preparation, warning=FALSE, message=FALSE}
+# load data through a Steam Spy API request
+req <- request(r"(steamspy.com/api.php)")
+resp <- req %>%
+  req_url_query(`request` = 'top100in2weeks') %>%
+  req_perform()
+
+#  Process the response JSON into a list of lists
+jlist <- resp %>%
+  resp_body_json(flatten= TRUE)
+
+# Melt the list of lists down into a format of a tidy dataframe
+df <- jlist %>%
+  map(as_tibble) %>%
+  reduce(bind_rows) %>%
+  # Select the columns which are relevant to our analysis
+  select(appid,name,positive_reviews = positive, negative_reviews = negative, owners, playtime = median_2weeks, positive_reviews = positive, price) %>%
+  # Calculate a new column for percent positive ratings
+  mutate(rating = round(positive_reviews/(positive_reviews + negative_reviews) ,3),
+         # Factorize the owner column which was previously stored as a string and reverse the ordering so the lowest owner amount would be the reference
+         owners = fct_rev(as_factor(owners)),
+         # Convert playtime from minutes to hours
+         playtime = round(playtime/60,2),
+         # Convert price to a numeric column and change it from cents to dollars
+         price = as.numeric(price)/100)
+
+# Preview the data
+knitr::kable(head(df))
+```
+
+Note that this analysis will be using data queried from the API on 5/4/2023. To maintain reproducibility of this project we have also uploaded the json file retrieved at this time period "top100in2weeks.json" on [GitHub](https://raw.githubusercontent.com/alu-potato/DATA606/main/Final%20Project/top100in2weeks.json). The following code block allows for utilizing said json file:
+
+```{r json load, eval=FALSE}
+# load data through a Steam Spy API request
+url <- r"(https://raw.githubusercontent.com/alu-potato/DATA606/main/Final%20Project/top100in2weeks.json)"
+
+#  Process the response JSON into a list of lists
+jlist <- read_json(url)
+
+# Melt the list of lists down into a format of a tidy dataframe
+df <- jlist %>%
+  map(as_tibble) %>%
+  reduce(bind_rows) %>%
+  # Select the columns which are relevant to our analysis
+  select(appid,name,positive_reviews = positive, negative_reviews = negative, owners, playtime = median_2weeks, positive_reviews = positive, price) %>%
+  # Calculate a new column for percent positive ratings
+  mutate(rating = round(positive_reviews/(positive_reviews + negative_reviews) ,3),
+         # Factorize the owner column which was previously stored as a string and reverse the ordering so the lowest owner amount would be the reference
+         owners = fct_rev(as_factor(owners)),
+         # Convert playtime from minutes to hours
+         playtime = round(playtime/60,2),
+         # Convert price to a numeric column and change it from cents to dollars
+         price = as.numeric(price)/100)
+
+# Preview the data
+knitr::kable(head(df))
+```
+
+## Exploratory Data Analysis
+
+### Summary Statistics
+
+We'll use the summary() function to get an overview of the data we are working with here. Looking between the data as a whole, we notice that the means are almost always skewed away from the median. This is especially prevalent in the reviews and the playtime with strong rightward skews. This means that there are large outliers within those categories that we might want to deal with to prevent our regression model from not being generalizable.
+
+However, if we compare the positive and negative review count categories with our transformed rating category, we can now see that the skew is much less noticeable with only less than a 2 percent difference between median and mean. Meaning we should use this category over the other two in our model.
+
+The factors within owners seem relatively well distributed around games with 10 to 20 million owners. The outliers to those games with higher ownership should not matter too much for a categorical variable.
+
+Looking at price we can see that even up to the 1st quartile games that are free are in the top 100 most users for the past two weeks. We expect this to be relevant in determining playtime later. The 3rd quartile games only go up to \$20 as well, while the typical price for a new release these days is \$60-\$70.
+
+Evaluating our response variable of playtime, we can see something odd right off the bat. There are games with no playtime within the top 100 most played games of the past two weeks as our minimum. Although, this is possible to be accounted for by many users launching the games and closing them right away leading to many users counted as "playing" a game, it should not be possible for these games to eclipse those with actual playtime recorded in them. This anomaly seems more likely to be an error in the data and should be dealt with as well.
+
+The mean of playtime being 9.3 hours and the median being 3.6 hours also indicates a few games being large outliers in average median playtime such as the game with 160.3 hours of median playtime per user.
+
+```{r df summary statistics}
+df %>%
+  select(-appid, -name) %>%
+  summary() %>%
+  knitr::kable()
+```
+
+### Boxplots and Histograms
+
+Looking at a histogram and boxplot for rating we can see that despite the mean and median being close from our summary statistics, there is still a leftward skew going on. In this case we have 5 outliers towards the left where despite the user ratings being low the game still manages to find itself on the top 100 most played. Here we will consider pruning the outlier with a user rating of less than 0.4, as it is completely disconnected from the rest of the user ratings. Thus not being a good input to take for a regression model.
+
+```{r rating hist}
+par(mfrow=c(1,2))
+
+ggplot(df, aes(x=rating)) + geom_histogram(binwidth = .025, na.rm = TRUE, color = "black") + 
+  xlim(c(0.3,1))+
+  ggtitle("User Rating Distribution")
+
+ggplot(df, aes(x=rating)) + geom_boxplot(fill = "grey") + 
+  ggtitle("User Rating Spread") +   
+  theme(axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank())
+```
+
+Looking at a histogram and boxplot for median playtime distribution we can see that it matches our findings from the summary statistics in that it is clustered towards the median playtime of 3.6 hours, but there are extreme outliers beyond the 50 hours of playtime mark. Since these are also completely disconnected from the rest of the rest of the distribution they likely will not tend to be an accurate representation of the population. Considering it logically as well, it simply doesn't make sense that a game shared between millions of players would have a median playtime of 150+ hours within two weeks. That's close to a whole week's worth of time, including nights, just playing the game.
+
+```{r playtime hist}
+par(mfrow=c(2,1))
+
+ggplot(df, aes(x=playtime)) + geom_histogram(bins = 50, na.rm = TRUE, color = "black") + 
+  ggtitle("User Playtime Distribution")
+
+ggplot(df, aes(x=playtime)) + geom_boxplot(fill = "grey") + 
+  ggtitle("User Playtime Spread") +   
+  theme(axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank())
+```
+
+### Outlier Removal
+
+#### Ratings
+
+Before removing our outlier for rating, let us take a look at it and surmise why this outlier exists in our data. Filtering for the outlier we can see that the game is Battlefield 2042, and now the outlier makes a little bit more sense. The game was supposed to be a major and solid release for the Battlefield franchise, but ended up releasing in a very poor state regarding performance, gameplay, and bugs. Thus, it was bombarded with many negative reviews immediately after release and the reviews never recovered. Despite that, updates over time have led to a state of the game that facilitates a healthy population of users.
+
+```{r rating outlier}
+df %>%
+  filter(rating < 0.40) %>%
+  knitr::kable()
+```
+
+Still, there's no compelling reason to leave this in for our regression model when it diverges so far from the rating baseline.
+
+```{r rating outlier removal}
+df <- df %>%
+  filter(!rating < 0.40)
+```
+
+#### No Playtime
+
+Taking a look at the games with no playtime, there doesn't seem to be much relating these games together besides most being older games.
+
+```{r no playtime}
+df %>%
+  filter(playtime == 0) %>%
+  select(name) %>%
+  knitr::kable()
+```
+
+Since there's no obvious pattern as to why the games wouldn't have any median playtime we will remove this believing it is erroneous data.
+
+```{r playtime outlier removal}
+df <- df %>%
+  filter(!playtime == 0)
+```
+
+#### High Playtime
+
+Taking a look at the games with high playtime, 3 out of 4 of the games here are free to play. However, that doesn't mean much considering we know that at least 25% of the games we initially had were free from the IQR of price. These games are also popular and have many players.
+
+```{r high playtime}
+df %>%
+  filter(playtime > 50) %>%
+  knitr::kable()
+```
+
+The fact that these games are popular makes it even stranger that their median playtime is so high. Since something isn't make sense with these data points, we will also remove them.
+
+```{r high playtime outlier removal}
+df <- df %>%
+  filter(!playtime > 50)
+```
+
+After removing outliers and suspected erroneous data we are now down from 100 observations to 84 observations which will impact our adjusted $R^2$.
+
+### Scatterplots and Correlation
+
+Going back to visualizing our data, we build a scatter plot for user rating against playtime. The results are not promising with a correlation of -0.1 which suggests little to no negative correlation. We can also notice that the variance of playtime changes as the rating increases. Additionally, there are some outliers with more than 20 hours of playtime present as we have accepted those as not being too extreme. With our low correlation, we would be violating the assumption
+
+```{r rating scatter, message = FALSE}
+ggplot(df, aes(x=rating,y=playtime)) + 
+  geom_point(na.rm = TRUE) +
+  geom_smooth(formula = y ~ x,method=lm, na.rm = TRUE, se = FALSE) +
+  stat_cor(aes(label = after_stat(r.label))) +
+  ggtitle("User Rating Against Playtime")
+```
+
+Next, we build a scatter plot for price against playtime. The results are even less promising with a correlation of -0.065 which suggests basically no negative correlation. We can also notice that the variance of playtime changes as the price decreases. This is as the majority of the top played games are either free or low in price. We might be able to counteract this with a square root transformation to price which could lead to closer data points and a greater magnitude of correlation.
+
+```{r price scatter, message = FALSE}
+par(mfrow=c(1,2))
+
+ggplot(df, aes(x=price,y=playtime)) + 
+  geom_jitter(na.rm = TRUE) +
+  geom_smooth(formula = y ~ x,method=lm, na.rm = TRUE, se = FALSE) +
+  stat_cor(aes(label = after_stat(r.label)), label.x = 60) +
+  ggtitle("Price Against Playtime")
+
+ggplot(df, aes(x=sqrt(price),y=playtime)) + 
+  geom_jitter(na.rm = TRUE) +
+  geom_smooth(formula = y ~ x,method=lm, na.rm = TRUE, se = FALSE) +
+  stat_cor(aes(label = after_stat(r.label)), label.x = 7.5) +
+  ggtitle("Root Price Against Playtime")
+```
+
+We can confirm that our correlation has been doubled to -0.12, which while is still very weak, it is better than we had before. Thus, we insert it into our dataframe.
+
+```{r root price, message = FALSE}
+df <- df %>%
+  mutate(root_price = sqrt(price), .keep = "unused")
+```
+
+Finally, we'll take a look at the pair plots for determining if we have colinearity between variables. As we have no correlations above 0.5 between variables, we can consider there being no colinearity here.
+
+```{r ggpairs, message = FALSE}
+df %>%
+  select(-appid, -name, -negative_reviews, -positive_reviews) %>%
+  ggpairs()
+```
+
+## Analysis
+
+The next step to take is building our regression models and then analyzing them.
+
+### Simple Linear Regression
+
+We first tackle our research question on determining if the user ratings, reported by Steam, are related to median playtime.
+
+#### Generating the Linear Model
+
+We utilize R's built in linear model generation to get our linear model below:
+
+```{r model generation}
+df_slm <- lm(playtime ~ rating, data = df)
+summary(df_slm)
+```
+
+With a y-intercept of 9.85 and a slope of -5.02, we get the regression model of:
+
+$\hat{playtime} = -5.02*rating + 9.85$
+
+This means that for every percentage point the rating goes up, the playtime goes down by .05 hours with a baseline of 9.85 hours played for a game with a 0% user rating. Oddly enough, we seem to have a negative relationship between playtime and a game's user rating.
+
+Next we can examine the information regarding the coefficients. The standard error we have is barely smaller than the estimate of the rating coefficient, which is not indicative of a good model's variability. Additionally, we have a small t-value that leaves the probability of any linear relationship being from chance of 35.0%.
+
+Finally we'll take a look at the goodness of fit with the multiple R-squared value. At 0.0107 we know that the model accounts for just 1.07% of variation in playtime based on the user rating. All signs so far point to our model not being fitting in this case.
+
+#### Assumption Analysis of the Model
+
+Let us take a look at the individual residuals and what they tell us with the model. Here we utilize ggfortify's autoplot capabilities to plot 4 diagnostic residual plots at once.
+
+```{r residual analysis slm}
+autoplot(df_slm)
+```
+
+Looking at the residuals vs fitted plot we can see that our data is not distributed well. The residuals are concentrated towards the left side and begin to fan out as we move to the right. These deviations mean that the model is not a great fit for our data as we have violated homoscedasticity.
+
+Generating a qq plot of our residuals reinforces the idea that our residuals do not seem to be normally distributed, and thus our model is not a great fit for the data. Both the lower and upper residual data deviates from normality, with the deviations towards the top quantiles being especially egregious. Thus, we have violated the assumption of residual normality.
+
+Going back to our scatterplot, the linearity between playtime and rating is dubious. The correlation is low and the spread is more of a cone shape than a line. We will consider the assumption of linearity violated as well.
+
+The one assumption that we have not violated here is independent observation as what games the different users will be playing is not going to be dependent on another game.
+
+#### Simple Linear Model Conclusion
+
+From our analysis here, we have come up with a simple linear regression model that was not appropriate for our data. As we were unable to create a good model just by using user rating and median playtime we are able to answer our research question here:
+
+**No the user ratings, reported by Steam, are not related to median playtime based on creating a regression model from the data.**
+
+### Multiple Regression
+
+Although our research question is answered, we still have the data to attempt to generate some type of relationship between our other predictor variables and median playtime. We will now create a multiple regression model to see if we can make a better model including the other variables.
+
+#### Generating the Model
+
+We utilize R's built in linear model generation to get our linear model below:
+
+```{r mlm model generation}
+df_mlm <- lm(playtime ~ rating + root_price + owners , data = df)
+summary(df_mlm)
+```
+
+This gives us a regression model of:
+
+$$
+\hat{playtime} = -3.512*rating - 0.181*\sqrt{price} - 0.673\text{( if owners 10m-20m)} - \\
+0.217\text{( if owners 20m-50m)} + 0.621\text{( if owners 50m-100m)} + 5.818\text{( if owners 100m-500m)} + 9.309
+$$
+
+With a y-intercept of 9.3 we are told that a game would have close to 9.3 hours of median playtime if there were no reviews at all.
+
+The rating coefficient tells us that for every percentage point a game is rated, the median playtime decreases by 0.035 hours. However, our p-value is not significant at 0.534 which tells us rating is not a good indicator for playtime.
+
+The root_price coefficient tells us that for every root dollar a game costs, the median playtime decreases by 0.181 hours. Yet again, our p-value at 0.434 is not significant which means root_price should not be used to determine playtime.
+
+For each owner coefficient we know that if the game falls into one of these four categories of the amount of owners, it will either increase or decrease the median playtime in hours by the coefficient. However, none of the coefficients have a significant p-value. Meaning that these changes could very well be because of random chance.
+
+Looking at the goodness of fit with the adjusted R-squared value. At -0.0312 we know that the model has taken so high of a penalty from our extra variables without gaining any benefit, that randomly guessing might as well be better.
+
+#### Assumption Analysis of the Model
+
+Let us take a look at the individual residuals and what they tell us with the model. Here we utilize ggfortify's autoplot capabilities to plot 4 diagnostic residual plots at once.
+
+```{r mlm residual analysis, warning=FALSE}
+autoplot(df_mlm)
+```
+
+Looking at the residuals vs fitted plot we can see that our data is not distributed well. The residuals are concentrated towards the left side and begin to fan out as we move to the right again. These deviations mean that the model is not a great fit for our data as we have violated homoscedasticity.
+
+Generating a qq plot of our residuals shows that our residuals do not seem to be normally distributed, and thus our model is not a great fit for the data. As the upper residual data deviates from normality quite a bit. Thus, we have violated the assumption of residual normality.
+
+Going back to our pair plot, the linearity between playtime and rating is dubious along with root_price and rating. The correlation is low and the spread is more of a cone shape than a line in both cases. We will consider the assumption of linearity violated as well because of these.
+
+We retain an assumption that we have not violated, independent observation as what games the different users will be playing is not going to be dependent on another game.
+
+The final assumption we check for multiple regression is colinearity. Going back to the pairplot we see that between predictor variables there is low correlation, thus we pass this assumption check.\
+
+#### Multiple Regression Model Conclusion
+
+From our analysis here, we have come up with a multiple linear regression model that was not appropriate for our data. The adjusted R\^2 was in the negatives and none of our coefficients were statistically significant. Additionally, three of our assumptions have been violated. In the end, this model was not much of an improvement over the previous model if at all.
+
+## Conclusion
+
+After going through our regression analysis we can answer our research question with our data. The user ratings, reported by Steam, are not related to median playtime based on creating a regression model from the data. This is because within our regression models created, user rating as a dependent variable is never a statistically significant predictor of median playtime.
+
+Knowing this might be useful to any future researchers who are interested in what sort of variables increase player retention and playtime. Despite, not being able to create a useful model we now know that in the future someone attempting the same analysis should attempt different methods to do so.
+
+We were limited with the amount of data we had in both the variables used as predictors and the sample size as a whole. Any further research should be attempted on a larger dataset, or with different methods of transforming the existing data.
+
+## References
+
+-   [Yun Yu's Harvard post](https://d3.harvard.edu/platform-digit/submission/steam-the-gaming-platform-before-there-were-platforms/) was used for the introduction assumptions on Steam's popularity.
+-   [Steam Spy](https://steamspy.com/about) was used for its API data.
+-   [PC Gamer](https://www.pcgamer.com/battlefield-2042-immediately-has-thousands-of-negative-reviews-on-steam/) contains more information on the outlier Battlefield 2042.
