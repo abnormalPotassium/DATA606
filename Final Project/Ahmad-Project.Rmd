@@ -218,7 +218,7 @@ After removing outliers and suspected erroneous data we are now down from 100 ob
 
 ### Scatterplots and Correlation
 
-Going back to visualizing our data, we build a scatter plot for user rating against playtime. The results are not promising with a correlation of -0.1 which suggests little to no negative correlation. We can also notice that the variance of playtime changes as the rating increases. Additionally, there are some outliers with more than 20 hours of playtime present as we have accepted those as not being too extreme. With our low correlation, we would be violating the assumption
+Going back to visualizing our data, we build a scatter plot for user rating against playtime. The results are not promising with a correlation of -0.1 which suggests little to no negative correlation. We can also notice that the variance of playtime changes as the rating increases. Additionally, there are some outliers with more than 20 hours of playtime present as we have accepted those as not being too extreme. With our low correlation and the spread of the plot, we would be violating the assumption of linearity by building a regression model.
 
 ```{r rating scatter, message = FALSE}
 ggplot(df, aes(x=rating,y=playtime)) + 
