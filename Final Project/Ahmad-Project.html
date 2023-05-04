@@ -935,7 +935,7 @@ correlation of -0.1 which suggests little to no negative correlation. We
 can also notice that the variance of playtime changes as the rating
 increases. Additionally, there are some outliers with more than 20 hours
 of playtime present as we have accepted those as not being too extreme.
-With our low correlation, we would be violating the assumption</p>
+With our low correlation and the spread of the plot, we would be violating the assumption of linearity by building a regression model.</p>
 <pre class="r"><code>ggplot(df, aes(x=rating,y=playtime)) + 
   geom_point(na.rm = TRUE) +
   geom_smooth(formula = y ~ x,method=lm, na.rm = TRUE, se = FALSE) +
